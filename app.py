@@ -2,96 +2,73 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# --- पेज कॉन्फ़िगरेशन ---
+# --- पेज सेटिंग ---
 st.set_page_config(page_title="मिश्रा मार्केट डैशबोर्ड", layout="wide")
-st.title("👑 मिश्रा मार्केट - स्मार्ट बिलिंग एवं लेजर")
+st.title("👑 मिश्रा मार्केट - स्मार्ट बिलिंग")
 
-# शीट की जानकारी
+# आपकी शीट की ID
 SHEET_ID = "19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo"
+# SHOP_DATA का पक्का GID
+GID = "1626084043" 
 
-# अलग-अलग टैब के GIDs (आपकी शीट के हिसाब से)
-GID_SHOP = "1626084043"    # SHOP_DATA
-GID_LEDGER = "0"           # Payment Ledger (अगर Sheet1 है तो 0, वरना अपनी GID चेक करें)
-GID_GOV = "123456789"      # Gov History (उदाहरण के लिए, अपनी GID यहाँ डालें)
+# डेटा लाने का लिंक
+CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
 
-@st.cache_data(ttl=600)
-def load_sheet_data(gid):
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
+def load_data():
     try:
-        df = pd.read_csv(url)
+        df = pd.read_csv(CSV_URL)
         df.columns = df.columns.str.strip()
-        return df.fillna(0)
+        # खाली रो हटाना
+        df = df.dropna(subset=['Shop_Name'])
+        # नंबर वाले कॉलम को सही करना
+        cols_to_fix = ['Current_Bill', 'Units_Used', 'Pending_Balance']
+        for col in cols_to_fix:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        return df
     except:
         return pd.DataFrame()
 
-# डेटा लोड करना
-df_shop = load_sheet_data(GID_SHOP)
+df = load_data()
 
-# --- मुख्य डैशबोर्ड लेआउट ---
-menu = ["📊 मुख्य डैशबोर्ड", "📑 दुकान बिल एवं लेजर", "⚡ सरकारी मीटर हिस्ट्री", "💰 कुल पेमेंट लेजर"]
-choice = st.sidebar.selectbox("मेन्यू चुनें", menu)
+if not df.empty:
+    # --- ऊपर के आंकड़े (Metrics) ---
+    t1, t2, t3 = st.columns(3)
+    with t1:
+        st.metric("कुल मासिक बिल", f"₹{df['Current_Bill'].sum():,.2f}")
+    with t2:
+        st.metric("कुल बकाया", f"₹{df['Pending_Balance'].sum():,.2f}")
+    with t3:
+        st.metric("कुल दुकानें", len(df))
 
-if not df_shop.empty:
-    
-    if choice == "📊 मुख्य डैशबोर्ड":
-        st.subheader("मार्केट की स्थिति (Overview)")
+    st.divider()
+
+    # --- दो हिस्से: बिल और चार्ट ---
+    col_left, col_right = st.columns([1, 1])
+
+    with col_left:
+        st.subheader("📍 दुकानदार का विवरण")
+        shop_list = df['Shop_Name'].unique().tolist()
+        selected_shop = st.selectbox("नाम चुनें:", shop_list)
         
-        # टॉप कार्ड्स
-        t1, t2, t3 = st.columns(3)
-        with t1:
-            total_bill = df_shop['Current_Bill'].sum()
-            st.metric("कुल मासिक बिल", f"₹{total_bill:,.2f}")
-        with t2:
-            total_pending = df_shop['Pending_Balance'].sum()
-            st.metric("कुल बकाया", f"₹{total_pending:,.2f}", delta_color="inverse")
-        with t3:
-            total_shops = len(df_shop)
-            st.metric("कुल दुकानें", total_shops)
-
-        st.divider()
-
-        # चार्ट्स
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("### 📈 दुकान वार बिल")
-            fig = px.bar(df_shop, x='Shop_Name', y='Current_Bill', color='Current_Bill', 
-                         labels={'Current_Bill':'बिल', 'Shop_Name':'दुकान'})
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with c2:
-            st.markdown("### 🥧 बकाया राशि का वितरण")
-            fig2 = px.pie(df_shop, values='Pending_Balance', names='Shop_Name', hole=0.4)
-            st.plotly_chart(fig2, use_container_width=True)
-
-    elif choice == "📑 दुकान बिल एवं लेजर":
-        st.subheader("व्यक्तिगत दुकान की जानकारी")
-        shop = st.selectbox("दुकान चुनें", df_shop['Shop_Name'].unique())
-        s_data = df_shop[df_shop['Shop_Name'] == shop].iloc[0]
+        data = df[df['Shop_Name'] == selected_shop].iloc[0]
         
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.info(f"📍 दुकान: {shop}")
-            st.write(f"📱 संपर्क: {s_data.get('WhatsApp_No', 'N/A')}")
-            st.write(f"📉 पिछली रीडिंग: {s_data.get('Prev_Reading', 0)}")
-            st.write(f"📈 नई रीडिंग: {s_data.get('Curr_Reading', 0)}")
-        
-        with col_r:
-            st.success(f"💵 इस महीने का बिल: ₹{s_data.get('Current_Bill', 0)}")
-            st.error(f"⚠️ बकाया: ₹{s_data.get('Pending_Balance', 0)}")
-            st.warning(f"🏦 कुल देय राशि: ₹{float(s_data.get('Current_Bill',0)) + float(s_data.get('Pending_Balance',0))}")
+        st.info(f"📱 WhatsApp: {data.get('WhatsApp_No', 'N/A')}")
+        st.write(f"📉 पुरानी रीडिंग: {data.get('Prev_Reading', 0)}")
+        st.write(f"📈 नई रीडिंग: {data.get('Curr_Reading', 0)}")
+        st.success(f"💵 इस महीने का बिल: ₹{data.get('Current_Bill', 0)}")
+        st.error(f"⚠️ पुराना बकाया: ₹{data.get('Pending_Balance', 0)}")
 
-    elif choice == "⚡ सरकारी मीटर हिस्ट्री":
-        st.subheader("सरकारी मीटर (Main Meter) का रिकॉर्ड")
-        # यहाँ आप सरकारी मीटर वाले टैब का डेटा दिखा सकते हैं
-        st.info("सरकारी मीटर टैब से डेटा यहाँ लोड किया जा रहा है...")
-        st.dataframe(df_shop[df_shop['Shop_Name'] == 'Sarkari Meter']) # उदाहरण
+    with col_right:
+        st.subheader("📊 बिल ग्राफ")
+        # छोटा ग्राफ
+        fig = px.bar(df, x='Shop_Name', y='Current_Bill', color='Current_Bill')
+        st.plotly_chart(fig, use_container_width=True)
 
-    elif choice == "💰 कुल पेमेंट लेजर":
-        st.subheader("मार्केट पेमेंट लेजर")
-        st.dataframe(df_shop[['Shop_Name', 'Paid_Amt', 'Pay_Date', 'Status']])
+    st.subheader("📋 पूरी लिस्ट")
+    st.dataframe(df)
 
 else:
-    st.error("डेटा लोड नहीं हो पाया! कृपया पक्का करें कि शीट में डेटा सही है।")
+    st.error("डेटा लोड नहीं हो पाया! कृपया GitHub पर कोड अपडेट करें और Reboot दबाएँ।")
 
-st.sidebar.markdown("---")
-st.sidebar.write("अंतिम अपडेट: 2026")
+st.sidebar.success("सिस्टम ऑनलाइन है")
