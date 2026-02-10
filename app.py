@@ -1,128 +1,230 @@
 import streamlit as st
 import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
 import urllib.parse
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from io import BytesIO
+import webbrowser
+import os
 
-# --- Google Sheet कनेक्ट करने के लिए (अभी कमेंटेड - बाद में अनकमेंट करो) ---
-# import gspread
-# from google.oauth2.service_account import Credentials
-# creds = Credentials.from_service_account_file("credentials.json", scopes=...)
-# client = gspread.authorize(creds)
-# sheet = client.open_by_key("YOUR_SHEET_ID").worksheet("SHOP_DATA")
-# data = sheet.get_all_records()
-# df = pd.DataFrame(data)
+# --- Google Sheet Setup (अपना Credentials JSON और Sheet ID डालो) ---
+# 1. Google Cloud से Service Account बनाओ, JSON डाउनलोड करो।
+# 2. लोकल में: credentials.json रखो।
+# 3. Streamlit Cloud/Heroku पर: Secrets में डालो (st.secrets["gcp_service_account"] = {...})
+SCOPE = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-# अभी के लिए हार्डकोडेड डेटा (आपकी असली शीट का सैंपल)
-def get_market_data():
-    columns = ["Shop_Name", "WhatsApp No", "Prev_Reading", "Curr_Reading", "Units_Used", 
-               "Effective_Unit_Rate", "Fix_Charge", "Current_Bill", "Pending Balance", 
-               "Total_Amount", "Status"]
-    data = [
-        ["माँ दुर्गा", "919936xxxxxx", 9002, 9050, 48, 9.64, 222, 684.72, 0, 684.72, "Paid ✅"],
-        ["पूनम लेडिज", "919936xxxxxx", 791, 850, 59, 9.64, 222, 790.76, 500, 1290.76, "Pending ❌"],
-        ["सरकारी मीटर", "N/A", 594, 770, 176, 0, 0, 0, 5228, 5228, "Loss Area"],
-        ["पूजा लेडिज", "919936xxxxxx", 653, 710, 57, 9.64, 222, 771.48, 1088, 1859.48, "Pending ❌"],
-        # नई दुकानें यहाँ ऐड कर सकते हो
-    ]
-    df = pd.DataFrame(data, columns=columns)
-    # ऑटो कैलकुलेशन अगर Curr_Reading अपडेट हो
-    df['Units_Used'] = df['Curr_Reading'] - df['Prev_Reading']
-    df['Current_Bill'] = (df['Units_Used'] * df['Effective_Unit_Rate']) + df['Fix_Charge']
-    df['Total_Amount'] = df['Current_Bill'] + df['Pending Balance']
-    df['Total_Amount'] = df['Total_Amount'].round(0).astype(int)  # राउंडिंग जैसा आप करते हो
-    return df
+@st.cache_resource
+def get_gsheet_client():
+    # लोकल टेस्ट के लिए JSON फाइल
+    creds_dict = {
+        "type": "service_account",
+        "project_id": "your-project-id",
+        "private_key_id": "your-private-key-id",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----",
+        "client_email": "your-service-account-email@project.iam.gserviceaccount.com",
+        "client_id": "your-client-id",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": "your-cert-url"
+    }
+    # ऊपर वाला creds_dict अपना डालो। Streamlit Cloud में st.secrets से लोड करो।
+    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
+    client = gspread.authorize(creds)
+    return client
+
+# अपना Google Sheet ID डालो (URL से कॉपी करो)
+SHEET_ID = "1YourSheetIDHere_ReplaceWithRealID"  # <-- यहां अपना Sheet ID पेस्ट करो
+
+client = get_gsheet_client()
+sheet = client.open_by_key(SHEET_ID)
+
+# --- Helper Functions ---
+def load_data(tab_name):
+    ws = sheet.worksheet(tab_name)
+    data = ws.get_all_records()
+    df = pd.DataFrame(data)
+    return df, ws
+
+def update_cell(ws, row, col, value):
+    ws.update_cell(row, col, value)
+
+def append_row(ws, row_data):
+    ws.append_row(row_data)
 
 # --- ऐप सेटिंग ---
-st.set_page_config(page_title="Mishra Market Admin 👑", layout="wide")
+st.set_page_config(page_title="मिश्रा मार्केट डिजिटल मुनीम 👑", layout="wide")
+st.title("मिश्रा मार्केट - जीरो लॉस रिकवरी सिस्टम 🚀")
 
 # --- साइडबार मेनू ---
-st.sidebar.title("👑 मिश्रा मार्केट एडमिन")
-choice = st.sidebar.radio("मेनू चुनें", [
-    "📋 पूरी शॉप लिस्ट (Live View)",
-    "🖋️ नई रीडिंग + बिल जनरेट",
+st.sidebar.title("👑 मेनू")
+choice = st.sidebar.radio("चुनें", [
+    "📊 डैशबोर्ड",
+    "🖋️ रीडिंग एंट्री & बिल",
     "💰 पेमेंट एंट्री",
-    "📊 सरकारी ऑडिट & गैप चेक"
+    "🗓️ महीना बंद (Month Close)",
+    "📄 PDF हिस्ट्री",
+    "🔍 सरकारी बिल & गैप ट्रैकर"
 ])
 
-df = get_market_data()
+# --- 1. डैशबोर्ड ---
+if choice == "📊 डैशबोर्ड":
+    st.header("एक नजर में सब")
+    df_shop, ws_shop = load_data("SHOP_DATA")
+    if not df_shop.empty:
+        # डायनामिक शॉप्स काउंट
+        num_shops = len(df_shop[df_shop['Shop_Name'] != "सरकारी मीटर"])
+        st.metric("कुल दुकानें (Dynamic)", num_shops)
+        
+        # कुल पेंडिंग, वसूली, आदि
+        total_pending = df_shop['Pending_Amount'].astype(float).sum()
+        total_payable = df_shop['Total_Payable_Amount'].astype(float).sum()
+        st.metric("कुल पेंडिंग", f"₹{total_pending:,.0f}", delta_color="inverse")
+        st.metric("इस महीने कुल वसूलना", f"₹{total_payable:,.0f}")
+        
+        # स्टेटस के साथ टेबल (ग्रीन/रेड)
+        styled = df_shop.style.applymap(lambda x: 'background-color: green' if x == "Paid ✅" else 'background-color: red' if x == "Pending ❌" else None, subset=['Status'])
+        st.dataframe(styled, use_container_width=True)
 
-# --- 1. पूरी लिस्ट ---
-if choice == "📋 पूरी शॉप लिस्ट (Live View)":
-    st.title("📋 मिश्रा मार्केट - लाइव रजिस्टर")
+# --- 2. रीडिंग एंट्री & बिल ---
+elif choice == "🖋️ रीडिंग एंट्री & बिल":
+    st.header("Current Reading डालें → बिल तैयार")
+    df_shop, ws_shop = load_data("SHOP_DATA")
+    shop_list = df_shop['Shop_Name'].tolist()
+    shop = st.selectbox("दुकान चुनें (Dynamic List)", shop_list)
     
-    search = st.text_input("🔍 दुकान नाम सर्च करें...")
-    filtered = df if not search else df[df['Shop_Name'].str.contains(search, case=False)]
-    
-    st.dataframe(
-        filtered.style
-        .format({"Total_Amount": "₹{:,.0f}", "Current_Bill": "₹{:,.0f}", "Pending Balance": "₹{:,.0f}"})
-        .applymap(lambda x: 'background-color: #ffcccc' if x == "Pending ❌" else None, subset=['Status']),
-        use_container_width=True, hide_index=True
-    )
-    
-    total_pending = df['Pending Balance'].sum()
-    total_to_collect = df[df['Shop_Name'] != "सरकारी मीटर"]['Total_Amount'].sum()
-    st.metric("कुल पेंडिंग बैलेंस", f"₹{total_pending:,.0f}")
-    st.metric("इस महीने कुल वसूलना", f"₹{total_to_collect:,.0f}")
+    if shop:
+        row = df_shop[df_shop['Shop_Name'] == shop].index[0] + 2  # gspread 1-indexed + header
+        prev = float(df_shop.loc[df_shop['Shop_Name'] == shop, 'Prev_Reading'].values[0])
+        rate = float(df_shop.loc[df_shop['Shop_Name'] == shop, 'Effective_Unit_Rate'].values[0])
+        fixed = float(df_shop.loc[df_shop['Shop_Name'] == shop, 'Fixed_Charge'].values[0])
+        pending = float(df_shop.loc[df_shop['Shop_Name'] == shop, 'Pending_Amount'].values[0])
+        
+        curr = st.number_input("Current Reading", min_value=prev)
+        
+        if st.button("बिल कैलकुलेट & सेव"):
+            if curr > prev:
+                units = curr - prev
+                curr_bill = (units * rate) + fixed
+                total = round(curr_bill + pending)
+                
+                # शीट अपडेट
+                update_cell(ws_shop, row, df_shop.columns.get_loc('Curr_Reading') + 1, curr)
+                update_cell(ws_shop, row, df_shop.columns.get_loc('Units_Used') + 1, units)
+                update_cell(ws_shop, row, df_shop.columns.get_loc('Current_Bill') + 1, curr_bill)
+                update_cell(ws_shop, row, df_shop.columns.get_loc('Total_Payable_Amount') + 1, total)
+                
+                st.success(f"Units: {units} | Current Bill: ₹{curr_bill:,.0f} | कुल: ₹{total:,.0f}")
+                
+                # WhatsApp बिल
+                phone = df_shop.loc[df_shop['Shop_Name'] == shop, 'WhatsApp No'].values[0]
+                msg = f"नमस्ते {shop} जी,\nUnits: {units}\nRate: ₹{rate}\nFixed: ₹{fixed}\nCurrent Bill: ₹{curr_bill}\nPending: ₹{pending}\nकुल: ₹{total}\nधन्यवाद!"
+                url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+                if st.button("WhatsApp भेजें"):
+                    webbrowser.open(url)
 
-# --- 2. नई रीडिंग एंट्री ---
-elif choice == "🖋️ नई रीडिंग + बिल जनरेट":
-    st.header("🖋️ नई रीडिंग दर्ज करें")
-    
-    shop = st.selectbox("दुकान चुनें", df['Shop_Name'].tolist())
-    row = df[df['Shop_Name'] == shop].iloc[0]
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("पिछली रीडिंग", row['Prev_Reading'])
-    curr = col2.number_input("Current Reading", min_value=float(row['Prev_Reading']), value=float(row['Curr_Reading']))
-    rate = col3.number_input("Effective Rate (₹/unit)", value=float(row['Effective_Unit_Rate']))
-    
-    units = curr - row['Prev_Reading']
-    bill = (units * rate) + row['Fix_Charge']
-    total = bill + row['Pending Balance']
-    
-    st.success(f"Units: **{units}** | Current Bill: **₹{bill:,.0f}** | कुल देना: **₹{total:,.0f}**")
-    
-    phone = row['WhatsApp No']
-    if phone != "N/A" and st.button("WhatsApp पर बिल भेजें"):
-        msg = f"""हाय {shop} जी,
-इस महीने का बिजली बिल:
-Units इस्तेमाल: {units}
-Rate: ₹{rate}
-Fixed Charge: ₹{row['Fix_Charge']}
-Current Bill: ₹{bill:,.0f}
-पुराना बकाया: ₹{row['Pending Balance']:,.0f}
-कुल जमा करना: ₹{total:,.0f}
-
-कृपया जल्दी जमा करें। धन्यवाद! 🙏"""
-        encoded = urllib.parse.quote(msg)
-        whatsapp_url = f"https://wa.me/{phone}?text={encoded}"
-        st.markdown(f"[📱 WhatsApp खोलें और मैसेज भेजें]({whatsapp_url})", unsafe_allow_html=True)
-
-# --- 3. पेमेंट एंट्री (भविष्य में एक्सपैंड कर सकते हो) ---
+# --- 3. पेमेंट एंट्री ---
 elif choice == "💰 पेमेंट एंट्री":
-    st.header("💰 पेमेंट रिसीव्ड")
-    shop_pay = st.selectbox("दुकान", df['Shop_Name'].tolist())
-    amt = st.number_input("मिला अमाउंट (₹)", min_value=0.0)
-    mode = st.selectbox("मोड", ["Cash", "UPI", "Bank Transfer"])
+    st.header("पेमेंट रिसीव्ड")
+    df_shop, ws_shop = load_data("SHOP_DATA")
+    df_ledger, ws_ledger = load_data("PAYMENT_LEDGER")
+    
+    shop = st.selectbox("दुकान", df_shop['Shop_Name'].tolist())
+    amount = st.number_input("मिला अमाउंट", min_value=0.0)
+    mode = st.selectbox("मोड", ["Cash", "Online"])
+    date = datetime.now().strftime("%Y-%m-%d")
+    
     if st.button("Save Payment"):
-        st.success(f"₹{amt} {mode} में रिसीव्ड! {shop_pay} का पेंडिंग अपडेट होगा।")
-        # असली में यहाँ sheet.update() करो
+        row = df_shop[df_shop['Shop_Name'] == shop].index[0] + 2
+        total_due = float(df_shop.loc[df_shop['Shop_Name'] == shop, 'Total_Payable_Amount'].values[0])
+        new_pending = total_due - amount
+        
+        # अपडेट SHOP_DATA
+        update_cell(ws_shop, row, df_shop.columns.get_loc('Pending_Amount') + 1, new_pending)
+        status = "Paid ✅" if new_pending <= 0 else "Pending ❌"
+        update_cell(ws_shop, row, df_shop.columns.get_loc('Status') + 1, status)
+        
+        # Ledger में ऐड
+        append_row(ws_ledger, [shop, amount, mode, date, new_pending])
+        
+        st.success(f"पेमेंट सेव! नया पेंडिंग: ₹{new_pending:,.0f}")
+        
+        # Receipt WhatsApp
+        phone = df_shop.loc[df_shop['Shop_Name'] == shop, 'WhatsApp No'].values[0]
+        msg = f"धन्यवाद {shop} जी! ₹{amount} ({mode}) मिला। बाकी: ₹{new_pending}\nतारीख: {date}"
+        url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+        if st.button("रसीद भेजें"):
+            webbrowser.open(url)
 
-# --- 4. सरकारी ऑडिट ---
-elif choice == "📊 सरकारी ऑडिट & गैप चेक":
-    st.title("📊 सरकारी बिल vs मार्केट रिकवरी")
+# --- 4. महीना बंद ---
+elif choice == "🗓️ महीना बंद (Month Close)":
+    st.header("महीना बंद करें - Careful!")
+    df_shop, ws_shop = load_data("SHOP_DATA")
+    df_history, ws_history = load_data("BILL_HISTORY")
     
-    govt_row = df[df['Shop_Name'] == "सरकारी मीटर"].iloc[0]
-    shops_units = df[df['Shop_Name'] != "सरकारी मीटर"]['Units_Used'].sum()
-    govt_units = govt_row['Units_Used']
-    gap = govt_units - shops_units
+    if st.button("Month Close & Carry Forward"):
+        for i, row_data in df_shop.iterrows():
+            if row_data['Shop_Name'] != "सरकारी मीटर":
+                # History में सेव
+                append_row(ws_history, [row_data['Shop_Name'], datetime.now().strftime("%Y-%m"), row_data['Prev_Reading'], row_data['Curr_Reading'], row_data['Units_Used'], row_data['Current_Bill'], row_data['Pending_Amount'], row_data['Total_Payable_Amount']])
+                
+                # Carry Forward: Curr → Prev, क्लियर Curr, Pending रहता है
+                shop_row = i + 2
+                update_cell(ws_shop, shop_row, df_shop.columns.get_loc('Prev_Reading') + 1, row_data['Curr_Reading'])
+                update_cell(ws_shop, shop_row, df_shop.columns.get_loc('Curr_Reading') + 1, 0)
+                update_cell(ws_shop, shop_row, df_shop.columns.get_loc('Units_Used') + 1, 0)
+                update_cell(ws_shop, shop_row, df_shop.columns.get_loc('Current_Bill') + 1, 0)
+        
+        st.success("महीना बंद! History सेव, नेक्स्ट मंथ रेडी।")
+
+# --- 5. PDF हिस्ट्री ---
+elif choice == "📄 PDF हिस्ट्री":
+    st.header("PDF Ledger जनरेट")
+    df_shop, _ = load_data("SHOP_DATA")
+    df_history, _ = load_data("BILL_HISTORY")
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("सरकारी यूनिट्स", govt_units)
-    col2.metric("दुकानों से यूनिट्स", shops_units)
-    col3.metric("गैप (Loss/Chori?)", gap, delta_color="inverse" if gap > 0 else "normal")
+    shop = st.selectbox("दुकान", df_shop['Shop_Name'].tolist())
     
-    total_recoverable = df[df['Shop_Name'] != "सरकारी मीटर"]['Total_Amount'].sum()
-    govt_demand = govt_row['Total_Amount']  # या अलग से सरकारी बिल अमाउंट
-    st.metric("मार्केट से वसूलना", f"₹{total_recoverable:,.0f}", 
-              delta=f"सरकारी डिमांड से {total_recoverable - govt_demand:,.0f} कम/ज्यादा")
+    if st.button("PDF बनाएं"):
+        hist = df_history[df_history['Shop_Name'] == shop]
+        buffer = BytesIO()
+        c = canvas.Canvas(buffer, pagesize=letter)
+        c.drawString(100, 750, f"{shop} का पूरा हिस्ट्री")
+        y = 700
+        for _, r in hist.iterrows():
+            c.drawString(100, y, f"{r['Month']}: Units {r['Units_Used']}, Bill ₹{r['Current_Bill']}, Pending ₹{r['Pending_Amount']}")
+            y -= 20
+        c.save()
+        buffer.seek(0)
+        st.download_button("PDF डाउनलोड", buffer, f"{shop}_history.pdf", "application/pdf")
+
+# --- 6. सरकारी बिल & गैप ट्रैकर ---
+elif choice == "🔍 सरकारी बिल & गैप ट्रैकर":
+    st.header("सरकारी बिल ट्रैकर")
+    df_govt, ws_govt = load_data("GOVT_BILL_DATA")
+    
+    # सरकारी डेटा इनपुट
+    govt_units = st.number_input("सरकारी यूनिट्स")
+    govt_amount = st.number_input("सरकारी बिल अमाउंट")
+    paid_date = st.date_input("पेड डेट")
+    paid_mode = st.selectbox("पेड मोड", ["Cash", "Online"])
+    
+    if st.button("Govt Bill Save"):
+        append_row(ws_govt, [datetime.now().strftime("%Y-%m"), govt_units, govt_amount, paid_date, paid_mode])
+        st.success("सेव!")
+    
+    # गैप चेक
+    df_shop, _ = load_data("SHOP_DATA")
+    shop_units = df_shop['Units_Used'].astype(float).sum()
+    gap = govt_units - shop_units
+    st.metric("गैप (चोरी/लॉस)", gap, delta_color="inverse")
+    if gap > 0:
+        st.error("अलर्ट: गैप है! चेक करें।")
+
+st.sidebar.info("Developed by Grok | सभी डेटा गूगल शीट से लाइव। सुरक्षित & ट्रांसपेरेंट 👑")
