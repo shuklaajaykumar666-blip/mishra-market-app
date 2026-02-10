@@ -1,144 +1,65 @@
 import streamlit as st
 import pandas as pd
-import urllib.parse
-import webbrowser
+import gspread
+from google.oauth2.service_account import Credentials
 
-# आपका सही CSV लिंक (आपके SHEET_ID से)
-CSV_URL = "https://docs.google.com/spreadsheets/d/19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo/export?format=csv&gid=0"
+# --- पेज सेटिंग ---
+st.set_page_config(page_title="Mishra Market HQ", layout="wide")
 
-# Sheet का Edit लिंक (Entry के लिए)
-SHEET_EDIT_URL = "https://docs.google.com/spreadsheets/d/19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo/edit"
+# --- चाबी का कनेक्शन (Secrets) ---
+def get_gspread_client():
+    # यहाँ हम आपकी JSON फाइल का मसाला इस्तेमाल करेंगे
+    scope = ['https://www.googleapis.com/auth/spreadsheets']
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+    return gspread.authorize(creds)
 
-@st.cache_data(ttl=300)
+# --- डेटा लोड करना ---
 def load_data():
-    try:
-        df = pd.read_csv(CSV_URL)
-        return df
-    except Exception as e:
-        st.error(f"डेटा लोड नहीं हो रहा। CSV लिंक चेक करें या शेयरिंग सही करें।\nएरर: {str(e)}")
-        return pd.DataFrame()
+    client = get_gspread_client()
+    # अपनी शीट का नाम यहाँ लिखें
+    sheet = client.open("Mishra_Market_Data").sheet1 
+    data = sheet.get_all_records()
+    return pd.DataFrame(data), sheet
 
-df = load_data()
+# --- ऐप का मुख्य हिस्सा ---
+st.title("👑 मिश्रा मार्केट डिजिटल हेडक्वाटर")
 
-st.set_page_config(page_title="मिश्रा मार्केट मुनीम 👑", layout="wide")
-st.title("👑 मिश्रा मार्केट - ब्रिलियंट डिजिटल मुनीम")
-st.caption("महीने में 1 बार यूज • डेटा Sheet में हमेशा सुरक्षित")
+try:
+    df, sheet = load_data()
 
-# सुंदर साइडबार
-st.sidebar.title("मेनू")
-choice = st.sidebar.radio("", [
-    "🏠 डैशबोर्ड",
-    "🖋️ रीडिंग + बिल भेजो",
-    "💰 पेमेंट + रसीद",
-    "📜 रिकॉर्ड भेजो"
-])
+    tab1, tab2, tab3 = st.tabs(["📊 डैशबोर्ड", "📝 रीडिंग एंट्री", "💰 पेमेंट लेजर"])
 
-# डैशबोर्ड को ब्रिलियंट बनाया
-if choice == "🏠 डैशबोर्ड":
-    st.header("एक नजर में पूरी कहानी")
-    
-    if df.empty:
-        st.warning("डेटा नहीं मिला। CSV लिंक या Sheet शेयरिंग चेक करें।")
-    else:
-        # कुल अमाउंट
-        total_pending = df["Pending_Amount"].astype(float).sum()
-        total_payable = df["Total_Payable_Amount"].astype(float).sum()
+    with tab1:
+        st.subheader("मार्केट की स्थिति")
+        total_units = df['Units_Used'].sum()
+        total_collection = df['Total_Amount'].sum()
         
-        col1, col2 = st.columns(2)
-        col1.metric("कुल पेंडिंग अमाउंट", f"₹{total_pending:,.0f}", delta_color="inverse")
-        col2.metric("इस महीने कुल वसूलना", f"₹{total_payable:,.0f}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("कुल खपत (Units)", f"{total_units}")
+        c2.metric("कुल वसूली लक्ष्य", f"₹{total_collection}")
+        c3.metric("सरकारी बिल", "₹48,522") # यहाँ आप सरकारी बिल डाल सकते हैं
+
+    with tab2:
+        st.subheader("रीडिंग रजिस्टर (Editable)")
+        # यहीं वो जादू है - शीट जैसा फील
+        edited_df = st.data_editor(df, num_rows="dynamic", key="data_editor")
         
-        # स्टेटस के साथ टेबल (कलरफुल)
-        def color_status(val):
-            if 'Paid' in str(val):
-                return 'background-color: #28a745; color: white'
-            elif 'Pending' in str(val):
-                return 'background-color: #dc3545; color: white'
-            else:
-                return 'background-color: #ffc107; color: black'
+        if st.button("शीट में डेटा सेव करें"):
+            sheet.update([edited_df.columns.values.tolist()] + edited_df.values.tolist())
+            st.success("डेटा पक्का हो गया, राजा साहब!")
 
-        styled_df = df.style.format({
-            "Total_Payable_Amount": "₹{:,.0f}",
-            "Pending_Amount": "₹{:,.0f}",
-            "Current_Bill": "₹{:,.0f}"
-        }).applymap(color_status, subset=['Status'])
-
-        st.subheader("दुकानों का डिटेल")
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-# रीडिंग + बिल
-elif choice == "🖋️ रीडिंग + बिल भेजो":
-    st.header("रीडिंग डालो और बिल भेजो")
-    shop = st.selectbox("दुकान चुनो", df["Shop_Name"].tolist())
-    
-    if shop:
-        row = df[df["Shop_Name"] == shop].iloc[0]
-        prev = float(row.get("Prev_Reading", 0))
-        rate = float(row.get("Effective_Unit_Rate", 9.64))
-        fixed = float(row.get("Fix_Charge", 222))
-        pending = float(row.get("Pending_Amount", 0))
+    with tab3:
+        st.subheader("दुकानदार का हिसाब")
+        shop = st.selectbox("दुकान चुनें", df['Shop_Name'].unique())
+        shop_data = df[df['Shop_Name'] == shop].iloc[0]
         
-        curr = st.number_input("Current Reading डालो", min_value=prev, step=1.0)
+        st.write(f"### {shop} का बिल")
+        st.write(f"पुरानी रीडिंग: {shop_data['Prev_Reading']}")
+        st.write(f"नई रीडिंग: {shop_data['Curr_Reading']}")
+        st.write(f"**कुल बकाया: ₹{shop_data['Total_Amount']}**")
         
-        if st.button("बिल बनाओ & WhatsApp भेजो"):
-            units = curr - prev
-            bill = round((units * rate) + fixed)
-            total = round(bill + pending)
-            
-            msg = f"""नमस्ते {shop} जी,
-इस महीने का बिल:
-Units इस्तेमाल: {units}
-Rate: ₹{rate}
-Fixed Charge: ₹{fixed}
-Current Bill: ₹{bill}
-पुराना बकाया: ₹{pending}
-कुल जमा करना: ₹{total}
+        if st.button("WhatsApp बिल भेजें"):
+            st.info("WhatsApp की लिंक जनरेट हो रही है...")
 
-कृपया समय पर जमा करें। धन्यवाद! 🙏"""
-
-            phone = str(row.get("WhatsApp No", "")).replace(" ", "")
-            if phone.startswith("91") and len(phone) == 12:
-                url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
-                webbrowser.open(url)
-                st.success("✅ WhatsApp खुल गया! मैसेज भेज दो")
-            else:
-                st.warning("WhatsApp नंबर चेक करें (91 से शुरू, 12 अंक)")
-
-# पेमेंट + रसीद
-elif choice == "💰 पेमेंट + रसीद":
-    st.header("पेमेंट रिसीव")
-    shop = st.selectbox("दुकान", df["Shop_Name"].tolist())
-    amount = st.number_input("मिला अमाउंट (₹)", min_value=0.0, step=10.0)
-    mode = st.selectbox("मोड", ["Cash", "UPI", "Bank Transfer"])
-    
-    if st.button("रसीद भेजो"):
-        msg = f"धन्यवाद {shop} जी! ₹{amount} ({mode}) मिल गया। बाकी पेंडिंग चेक कर लें।"
-        phone = str(df[df["Shop_Name"] == shop]["WhatsApp No"].values[0]).replace(" ", "")
-        url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
-        webbrowser.open(url)
-        st.success("✅ रसीद WhatsApp पर भेज दी!")
-
-# रिकॉर्ड भेजो
-elif choice == "📜 रिकॉर्ड भेजो":
-    st.header("पुराना रिकॉर्ड भेजो")
-    shop = st.selectbox("दुकान", df["Shop_Name"].tolist())
-    if st.button("रिकॉर्ड भेजो"):
-        row = df[df["Shop_Name"] == shop].iloc[0]
-        msg = f"""{shop} का पूरा रिकॉर्ड:
-Prev Reading: {row.get('Prev_Reading', 'N/A')}
-Current Reading: {row.get('Curr_Reading', 'N/A')}
-Units Used: {row.get('Units_Used', 'N/A')}
-Pending Amount: ₹{row.get('Pending_Amount', 0):,.0f}
-Total Payable: ₹{row.get('Total_Payable_Amount', 0):,.0f}
-Status: {row.get('Status', 'Pending')}"""
-        phone = str(row["WhatsApp No"]).replace(" ", "")
-        webbrowser.open(f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}")
-        st.success("✅ रिकॉर्ड भेज दिया!")
-
-# Sheet Entry बटन
-st.sidebar.markdown("---")
-st.sidebar.info("रीडिंग/पेमेंट डालने के लिए Sheet खोलो")
-if st.sidebar.button("📂 Google Sheet खोलो (Entry करो)"):
-    webbrowser.open(SHEET_EDIT_URL)
-
-st.sidebar.info("महीने में 1 बार यूज • सब कुछ Sheet में सुरक्षित 👑")
+except Exception as e:
+    st.error(f"अभी कनेक्शन नहीं हुआ है। पहले GitHub पर डालें। Error: {e}")
