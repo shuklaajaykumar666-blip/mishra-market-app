@@ -3,7 +3,7 @@ import pandas as pd
 import urllib.parse
 import webbrowser
 
-# आपका सही CSV लिंक (आपके SHEET_ID से बना)
+# आपका सही CSV लिंक
 CSV_URL = "https://docs.google.com/spreadsheets/d/19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo/export?format=csv&gid=0"
 
 # Sheet का Edit लिंक (Entry के लिए)
@@ -16,25 +16,43 @@ def load_data():
 df = load_data()
 
 st.set_page_config(page_title="मिश्रा मार्केट मुनीम 👑", layout="wide")
-st.title("मिश्रा मार्केट - Digital Munim")
+st.title("👑 मिश्रा मार्केट - Digital Munim")
 st.caption("महीने में 1 बार यूज • सब कुछ Sheet में सुरक्षित")
 
+# सुंदर डैशबोर्ड
 choice = st.sidebar.radio("मेनू चुनो", [
-    "📋 डैशबोर्ड",
-    "🖋️ रीडिंग डालो + बिल भेजो",
-    "💰 पेमेंट + रसीद भेजो",
-    "📜 पुराना रिकॉर्ड भेजो"
+    "🏠 डैशबोर्ड",
+    "🖋️ रीडिंग + बिल भेजो",
+    "💰 पेमेंट + रसीद",
+    "📜 रिकॉर्ड भेजो"
 ])
 
-if choice == "📋 डैशबोर्ड":
-    st.header("आज का पूरा हिसाब")
-    st.dataframe(
-        df.style.format({"Total_Payable_Amount": "₹{:,.0f}", "Pending_Amount": "₹{:,.0f}"}),
-        use_container_width=True
-    )
+if choice == "🏠 डैशबोर्ड":
+    st.header("एक नजर में पूरा हिसाब")
 
-elif choice == "🖋️ रीडिंग डालो + बिल भेजो":
-    st.header("रीडिंग एंट्री")
+    # कुल पेंडिंग और वसूलना (बड़ा और रंगीन)
+    total_pending = df["Pending_Amount"].astype(float).sum()
+    total_payable = df["Total_Payable_Amount"].astype(float).sum()
+
+    col1, col2 = st.columns(2)
+    col1.metric("कुल पेंडिंग अमाउंट", f"₹{total_pending:,.0f}", delta_color="inverse")
+    col2.metric("इस महीने कुल वसूलना", f"₹{total_payable:,.0f}")
+
+    # दुकानों की लिस्ट (कलर के साथ)
+    def color_status(val):
+        color = 'green' if 'Paid' in str(val) else 'red' if 'Pending' in str(val) else 'black'
+        return f'background-color: {color}; color: white'
+
+    styled_df = df.style.format({
+        "Total_Payable_Amount": "₹{:,.0f}",
+        "Pending_Amount": "₹{:,.0f}",
+        "Current_Bill": "₹{:,.0f}"
+    }).applymap(color_status, subset=['Status'])
+
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+elif choice == "🖋️ रीडिंग + बिल भेजो":
+    st.header("रीडिंग डालो और बिल भेजो")
     shop = st.selectbox("दुकान चुनो", df["Shop_Name"].tolist())
     
     if shop:
@@ -44,9 +62,9 @@ elif choice == "🖋️ रीडिंग डालो + बिल भेजो
         fixed = float(row.get("Fix_Charge", 222))
         pending = float(row.get("Pending_Amount", 0))
         
-        curr = st.number_input("Current Reading डालो", min_value=prev)
+        curr = st.number_input("Current Reading डालो", min_value=prev, step=1.0)
         
-        if st.button("बिल तैयार करो & WhatsApp भेजो"):
+        if st.button("बिल बनाओ & WhatsApp भेजो"):
             units = curr - prev
             bill = round((units * rate) + fixed)
             total = round(bill + pending)
@@ -60,35 +78,33 @@ Current Bill: ₹{bill}
 पुराना बकाया: ₹{pending}
 कुल जमा करना: ₹{total}
 
-कृपया जल्दी जमा करें। धन्यवाद! 🙏"""
+कृपया समय पर जमा करें। धन्यवाद! 🙏"""
 
             phone = str(row["WhatsApp No"]).replace(" ", "")
-            if phone.startswith("91") and len(phone) == 12:
+            if phone.startswith("91"):
                 url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
                 webbrowser.open(url)
                 st.success("✅ WhatsApp खुल गया! मैसेज भेज दो")
             else:
-                st.warning("WhatsApp नंबर चेक करें (91 से शुरू, 12 अंक)")
+                st.warning("नंबर चेक करें (91 से शुरू)")
 
-elif choice == "💰 पेमेंट + रसीद भेजो":
+elif choice == "💰 पेमेंट + रसीद":
     st.header("पेमेंट रिसीव")
     shop = st.selectbox("दुकान", df["Shop_Name"].tolist())
-    amount = st.number_input("मिला अमाउंट (₹)", min_value=0.0)
+    amount = st.number_input("मिला अमाउंट (₹)", min_value=0.0, step=10.0)
     mode = st.selectbox("मोड", ["Cash", "UPI", "Bank Transfer"])
     
     if st.button("रसीद भेजो"):
         msg = f"धन्यवाद {shop} जी! ₹{amount} ({mode}) मिल गया। बाकी पेंडिंग चेक कर लें।"
         phone = str(df[df["Shop_Name"] == shop]["WhatsApp No"].values[0]).replace(" ", "")
-        if phone.startswith("91"):
-            webbrowser.open(f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}")
-            st.success("✅ रसीद WhatsApp पर भेज दी!")
-        else:
-            st.warning("नंबर चेक करें")
+        url = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+        webbrowser.open(url)
+        st.success("✅ रसीद WhatsApp पर भेज दी!")
 
-elif choice == "📜 पुराना रिकॉर्ड भेजो":
-    st.header("रिकॉर्ड भेजो")
+elif choice == "📜 रिकॉर्ड भेजो":
+    st.header("पुराना रिकॉर्ड भेजो")
     shop = st.selectbox("दुकान", df["Shop_Name"].tolist())
-    if st.button("रिकॉर्ड WhatsApp पर भेजो"):
+    if st.button("रिकॉर्ड भेजो"):
         row = df[df["Shop_Name"] == shop].iloc[0]
         msg = f"""{shop} का पूरा रिकॉर्ड:
 Prev Reading: {row.get('Prev_Reading', 'N/A')}
@@ -101,7 +117,7 @@ Status: {row.get('Status', 'Pending')}"""
         webbrowser.open(f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}")
         st.success("✅ रिकॉर्ड भेज दिया!")
 
-# Sheet खोलने का बटन (Entry के लिए)
+# Sheet खोलने का बटन
 st.sidebar.markdown("---")
 st.sidebar.info("रीडिंग/पेमेंट डालने के लिए Sheet खोलो")
 if st.sidebar.button("📂 Google Sheet खोलो (Entry करो)"):
