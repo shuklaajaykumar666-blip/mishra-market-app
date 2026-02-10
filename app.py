@@ -4,7 +4,7 @@ import urllib.parse
 import webbrowser
 
 # ==================== अपना CSV लिंक यहाँ डालो ====================
-CSV_URL = "https://docs.google.com/spreadsheets/d/19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo/edit?gid=731375192#gid=731375192/export?format=csv"
+CSV_URL = "https://https://docs.google.com/spreadsheets/d/19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo/export?format=csv&gid=0
 # =================================================================
 
 @st.cache_data(ttl=300)
@@ -97,5 +97,5 @@ Status : {row.get('Status', 'Pending')}"""
 
 st.sidebar.info("Entry के लिए नीचे बटन दबाओ")
 if st.sidebar.button("📂 Google Sheet खोलो (Entry के लिए)"):
-    sheet_edit_url = "https://docs.google.com/spreadsheets/d/19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo/edit?gid=731375192#gid=731375192/edit"
+    sheet_edit_url = "https://https://docs.google.com/spreadsheets/d/19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo/export?format=csv&gid=0
     webbrowser.open(sheet_edit_url)
