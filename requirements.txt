@@ -1,3 +1,7 @@
-streamlit
+streamlit>=1.30.0
 pandas
-plotly
+gspread>=5.0.0
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+reportlab>=4.0.0
