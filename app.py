@@ -3,46 +3,43 @@ import pandas as pd
 import plotly.express as px
 import urllib.parse
 
-st.set_page_config(page_title="मिश्रा मार्केट - मैनेजमेंट", layout="wide")
+st.set_page_config(page_title="मिश्रा मार्केट मैनेजमेंट", layout="wide")
 
-# डेटा लिंक
+# डेटा लिंक (बिना GID के, ताकि यह पूरी फाइल को एक्सेस कर सके)
 SHEET_ID = "19UmwSuKigMDdSRsVMZOVjIZAsvrqOePwcqHuP7N3qHo"
 
-# डेटा लोड करने का सबसे सुरक्षित तरीका
-def load_sheet(gid):
+@st.cache_data(ttl=5)
+def load_all_data():
     try:
-        url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
+        # यहाँ हम सीधे CSV एक्सपोर्ट का उपयोग कर रहे हैं जो पहले टैब को उठाता है
+        url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
         df = pd.read_csv(url)
-        # कॉलम के नाम से सिर्फ फालतू स्पेस हटाना, नाम वही रहेंगे जो आपने दिए हैं
-        df.columns = df.columns.str.strip()
-        # नंबर वाले कॉलम को साफ़ करना
-        for col in df.columns:
-            if any(x in col for x in ['Amount', 'Bill', 'Reading', 'Units', 'Charge', 'Balance', 'Payable', 'Paid']):
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        df.columns = df.columns.str.strip() # सिर्फ स्पेस साफ़ करना
         return df
-    except:
+    except Exception as e:
         return pd.DataFrame()
 
-# टैब के हिसाब से GID लोड करना (कृपया अपनी शीट से GID चेक कर लें, SHOP_DATA=1626084043)
-df_shop = load_sheet("1626084043")
-df_ledger = load_sheet("0") # PAYMENT_LEDGER का GID यहाँ डालें
-df_govt = load_sheet("123456789") # GOVT_BILL_DATA का GID यहाँ डालें
+df_shop = load_all_data()
 
 if not df_shop.empty:
-    st.title("👑 मिश्रा मार्केट - स्मार्ट बिलिंग सिस्टम")
+    st.title("👑 मिश्रा मार्केट - स्मार्ट मैनेजमेंट")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 डैशबोर्ड", "🧾 व्हाट्सएप बिल", "💰 पेमेंट लेजर", "⚡ सरकारी हिसाब"])
+    tab1, tab2, tab3 = st.tabs(["📊 डैशबोर्ड", "🧾 व्हाट्सएप बिल", "💰 अन्य रिकॉर्ड"])
 
     with tab1:
+        # आपके कॉलम नामों का उपयोग: Total_Payable_Amount
         c1, c2, c3 = st.columns(3)
-        # आपके दिए कॉलम 'Total_Payable_Amount' का इस्तेमाल
-        total_to_collect = df_shop['Total_Payable_Amount'].sum()
-        c1.metric("कुल वसूली (Total Payable)", f"₹{total_to_collect:,.2f}")
+        
+        # सुरक्षित तरीके से नंबर में बदलना ताकि एरर न आए
+        total_amt = pd.to_numeric(df_shop['Total_Payable_Amount'], errors='coerce').sum()
+        total_units = pd.to_numeric(df_shop['Units'], errors='coerce').sum()
+        
+        c1.metric("कुल वसूली (Total Payable)", f"₹{total_amt:,.2f}")
         c2.metric("कुल दुकानें", len(df_shop))
-        c3.metric("कुल खपत (Units)", f"{df_shop['Units'].sum():,.0f}")
+        c3.metric("कुल यूनिट्स", f"{int(total_units)}")
         
         st.divider()
-        fig = px.bar(df_shop, x='Shop_Name', y='Total_Payable_Amount', color='Total_Payable_Amount', title="दुकान वार कुल देय राशि")
+        fig = px.bar(df_shop, x='Shop_Name', y='Total_Payable_Amount', color='Total_Payable_Amount', title="दुकान वार कुल बिल")
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(df_shop)
 
@@ -54,15 +51,15 @@ if not df_shop.empty:
         col_l, col_r = st.columns(2)
         with col_l:
             st.info(f"📍 दुकान: {selected_shop}")
-            st.write(f"📱 व्हाट्सएप: {row['WhatsApp_No']}")
-            st.write(f"📉 रीडिंग: {row['Prev_Reading']} से {row['Current_Reading']}")
-            st.write(f"⚡ यूनिट्स: {row['Units']}")
+            st.write(f"📉 रीडिंग: {row['Prev_Reading']} -> {row['Current_Reading']}")
+            st.write(f"🔢 यूनिट्स: {row['Units']}")
+            st.write(f"📅 देय तिथि: {row['Payment_Due_Date']}")
         with col_r:
-            st.success(f"💵 इस महीने का बिल: ₹{row['Current_Bill']}")
-            st.error(f"⚠️ पुराना बकाया: ₹{row['Pending_Amount']}")
+            st.success(f"💵 माह बिल: ₹{row['Current_Bill']}")
+            st.error(f"⚠️ बकाया: ₹{row['Pending_Amount']}")
             st.warning(f"🏦 कुल देय राशि: ₹{row['Total_Payable_Amount']}")
 
-        # व्हाट्सएप संदेश - आपके सटीक कॉलम नामों के साथ
+        # व्हाट्सएप मैसेज - आपके सटीक कॉलम नामों के साथ
         message = (
             f"👑 *मिश्रा मार्केट - बिजली बिल*\n"
             f"📅 महीना: {row['Month']} {row['Year']}\n"
@@ -80,21 +77,12 @@ if not df_shop.empty:
         
         phone = str(row['WhatsApp_No']).split('.')[0].replace(' ', '').replace('+', '')
         wa_url = f"https://wa.me/91{phone}?text={urllib.parse.quote(message)}"
-        st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;padding:15px;border:none;border-radius:10px;width:100%;font-weight:bold;cursor:pointer;width:100%;">🟢 व्हाट्सएप पर बिल भेजें</button></a>', unsafe_allow_html=True)
+        st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;padding:15px;border:none;border-radius:10px;width:100%;font-weight:bold;cursor:pointer;width:100%;">🟢 व्हाट्सएप पर फाइनल बिल भेजें</button></a>', unsafe_allow_html=True)
 
     with tab3:
-        st.subheader("💰 पेमेंट लेजर रिकॉर्ड")
-        if not df_ledger.empty:
-            st.dataframe(df_ledger, use_container_width=True)
-        else:
-            st.info("पेमेंट लेजर का डेटा लोड करें।")
-
-    with tab4:
-        st.subheader("⚡ सरकारी बिल तुलना")
-        if not df_govt.empty:
-            st.dataframe(df_govt, use_container_width=True)
-        else:
-            st.info("सरकारी बिल डेटा लोड करें।")
+        st.info("💡 PAYMENT_LEDGER और GOVT_BILL_DATA देखने के लिए सुनिश्चित करें कि वे आपकी गूगल शीट के अन्य टैब में मौजूद हैं।")
+        st.write("अभी आप मुख्य डैशबोर्ड और व्हाट्सएप बिल का उपयोग कर सकते हैं।")
 
 else:
-    st.error("डेटा लोड नहीं हो पाया। SHOP_DATA को अपनी शीट में पहले नंबर पर रखें।")
+    st.error("डेटा लोड नहीं हो पाया।")
+    st.info("💡 समाधान: अपनी गूगल शीट खोलें और नीचे 'SHOP_DATA' वाले टैब को माउस से पकड़कर सबसे बाईं (पहले) नंबर पर खिसका दें।")
