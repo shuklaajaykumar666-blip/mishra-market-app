@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import urllib.parse
 
 st.set_page_config(page_title="मिश्रा मार्केट", layout="wide")
@@ -13,76 +12,72 @@ CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 def load_data():
     try:
         df = pd.read_csv(CSV_URL)
-        # सिर्फ कॉलम के नाम से स्पेस साफ़ करना ताकि कोड उन्हें ढूंढ सके
-        df.columns = df.columns.str.strip()
-        return df.dropna(subset=['Shop_Name'])
+        # कॉलम के नामों में से फालतू स्पेस हटाना ताकि एरर न आए
+        df.columns = [str(c).strip() for c in df.columns]
+        return df.dropna(subset=[df.columns[0]]) # पहले कॉलम (Shop Name) के आधार पर खाली लाइनें हटाना
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Sheet Error: {e}")
         return pd.DataFrame()
 
 df = load_data()
 
 if not df.empty:
-    st.title("👑 मिश्रा मार्केट - लाइव बिलिंग")
+    st.title("👑 मिश्रा मार्केट बिलिंग")
     
-    tab1, tab2 = st.tabs(["📊 डैशबोर्ड", "🧾 व्हाट्सएप बिल"])
+    # --- टैब ---
+    tab1, tab2 = st.tabs(["📋 पूरी लिस्ट", "🧾 व्हाट्सएप बिल भेजें"])
 
     with tab1:
-        # यहाँ हम सीधे आपके द्वारा दिए गए कॉलम के नाम इस्तेमाल कर रहे हैं
-        c1, c2, c3 = st.columns(3)
-        
-        # शीट से सीधा डेटा उठाना (बिना किसी बदलाव के)
-        # हमने pd.to_numeric सिर्फ इसलिए लगाया है ताकि 'Sum' (जोड़) हो सके
-        total_collection = pd.to_numeric(df['Total_Amount'], errors='coerce').sum()
-        total_units = pd.to_numeric(df['Units_Used'], errors='coerce').sum()
-        
-        c1.metric("कुल वसूली (Total Amount)", f"₹{total_collection:,.2f}")
-        c2.metric("कुल दुकानें", len(df))
-        c3.metric("कुल खपत (Units)", f"{total_units:,.0f}")
-
-        st.divider()
-        # ग्राफ भी अब सीधे 'Total_Amount' कॉलम से बनेगा
-        fig = px.bar(df, x='Shop_Name', y='Total_Amount', color='Total_Amount', 
-                     title="दुकान वार फाइनल बिल स्थिति")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(df)
+        st.subheader("पूरी दुकान लिस्ट (जैसा शीट में है)")
+        # सीधे आपकी शीट का डेटा दिखा रहा है
+        st.dataframe(df, use_container_width=True)
 
     with tab2:
-        st.subheader("दुकानदार का बिल चुनें")
-        shop = st.selectbox("नाम चुनें:", df['Shop_Name'].unique())
-        row = df[df['Shop_Name'] == shop].iloc[0]
-
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.info(f"📍 दुकान: {shop}")
-            st.write(f"📉 पिछली रीडिंग: {row['Prev_Reading']}")
-            st.write(f"📈 नई रीडिंग: {row['Curr_Reading']}")
-            st.write(f"🔢 इस्तेमाल यूनिट: {row['Units_Used']}")
-        with col_r:
-            st.success(f"💵 इस माह का बिल: ₹{row['Current_Bill']}")
-            st.error(f"⚠️ पुराना बकाया: ₹{row['Pending_Balance']}")
-            # यहाँ सीधा आपकी शीट का 'Total_Amount' दिखेगा
-            st.warning(f"🏦 कुल देय राशि (Final): ₹{row['Total_Amount']}")
-
-        # व्हाट्सएप संदेश - सीधे आपकी शीट की वैल्यूज के साथ
-        msg = (
-            f"👑 *मिश्रा मार्केट - बिजली बिल*\n\n"
-            f"📍 दुकान: *{shop}*\n"
-            f"🔢 यूनिट्स: {row['Units_Used']}\n"
-            f"--------------------------\n"
-            f"💵 माह बिल: ₹{row['Current_Bill']}\n"
-            f"⚠️ बकाया: ₹{row['Pending_Balance']}\n"
-            f"💰 *कुल जमा राशि: ₹{row['Total_Amount']}*\n"
-            f"--------------------------\n"
-            f"कृपया समय पर भुगतान करें। धन्यवाद। 🙏"
-        )
+        st.subheader("दुकान चुनें")
+        # आपकी शीट का पहला कॉलम (दुकान का नाम) उठाएगा
+        shop_col = df.columns[0] 
+        shop_list = df[shop_col].unique()
+        selected_shop = st.selectbox("दुकानदार का नाम:", shop_list)
         
-        # फोन नंबर साफ़ करना
-        phone = str(row['WhatsApp_No']).split('.')[0].replace(' ', '').replace('+', '')
-        wa_url = f"https://wa.me/91{phone}?text={urllib.parse.quote(msg)}"
+        row = df[df[shop_col] == selected_shop].iloc[0]
+
+        # शीट से सीधा डेटा दिखाना (जो कॉलम उपलब्ध हैं वही दिखाएगा)
+        st.write("---")
+        cols = st.columns(len(df.columns[:6])) # पहले 6 कॉलम दिखाने के लिए
+        for i, col_name in enumerate(df.columns[:6]):
+            cols[i % len(cols)].metric(col_name, row[col_name])
+
+        st.write("---")
         
-        st.divider()
-        st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;padding:15px;border:none;border-radius:10px;width:100%;font-weight:bold;cursor:pointer;font-size:18px;">🟢 व्हाट्सएप पर बिल भेजें</button></a>', unsafe_allow_html=True)
+        # व्हाट्सएप मैसेज (हम मान रहे हैं कि आपकी शीट में ये कॉलम नाम हैं)
+        # अगर नाम थोड़े अलग भी हुए तो यह एरर नहीं देगा, खाली छोड़ देगा
+        try:
+            wa_no = str(row.get('WhatsApp No', row.get('WhatsApp_No', ''))).split('.')[0]
+            curr_bill = row.get('Current_Bill', row.get('Current Bill', '0'))
+            pend_bill = row.get('Pending Balance', row.get('Pending_Balance', '0'))
+            total_bill = row.get('Total Amount', row.get('Total_Amount', row.get('Total Amount', '0')))
+            units = row.get('Units Used', row.get('Units_Used', '0'))
+
+            message = (
+                f"👑 *मिश्रा मार्केट - बिजली बिल*\n\n"
+                f"📍 दुकान: *{selected_shop}*\n"
+                f"🔢 यूनिट्स: {units}\n"
+                f"--------------------------\n"
+                f"💵 माह बिल: ₹{curr_bill}\n"
+                f"⚠️ बकाया: ₹{pend_bill}\n"
+                f"💰 *कुल देय राशि: ₹{total_bill}*\n"
+                f"--------------------------\n"
+                f"धन्यवाद। 🙏"
+            )
+            
+            if wa_no:
+                encoded_msg = urllib.parse.quote(message)
+                wa_url = f"https://wa.me/91{wa_no}?text={encoded_msg}"
+                st.markdown(f'<a href="{wa_url}" target="_blank"><button style="background-color:#25D366;color:white;padding:15px;border:none;border-radius:10px;width:100%;font-weight:bold;cursor:pointer;">🟢 व्हाट्सएप पर बिल भेजें</button></a>', unsafe_allow_html=True)
+            else:
+                st.warning("व्हाट्सएप नंबर नहीं मिला।")
+        except Exception as e:
+            st.error("व्हाट्सएप मैसेज तैयार करने में दिक्कत आ रही है।")
 
 else:
-    st.warning("डेटा लोड नहीं हो पाया।")
+    st.warning("डेटा लोड नहीं हो पाया। अपनी शीट चेक करें।")
