@@ -8,9 +8,14 @@ st.set_page_config(page_title="Mishra Market HQ", layout="wide")
 
 # --- चाबी का कनेक्शन (Secrets) ---
 def get_gspread_client():
-    # यहाँ हम आपकी JSON फाइल का मसाला इस्तेमाल करेंगे
     scope = ['https://www.googleapis.com/auth/spreadsheets']
-    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+    
+    # राजा साहब, यहाँ हमने एक 'Filter' लगाया है जो चाबी को साफ़ करेगा
+    creds_info = dict(st.secrets["gcp_service_account"])
+    # \n को असली न्यू-लाइन में बदलना ज़रूरी है
+    creds_info["private_key"] = creds_info["private_key"].replace("\\n", "\n")
+    
+    creds = Credentials.from_service_account_info(creds_info, scopes=scope)
     return gspread.authorize(creds)
 
 # --- डेटा लोड करना ---
@@ -31,20 +36,22 @@ try:
 
     with tab1:
         st.subheader("मार्केट की स्थिति")
+        # कॉलम के नाम आपके द्वारा दिए गए नामों से मैच होने चाहिए
         total_units = df['Units_Used'].sum()
         total_collection = df['Total_Amount'].sum()
         
         c1, c2, c3 = st.columns(3)
         c1.metric("कुल खपत (Units)", f"{total_units}")
         c2.metric("कुल वसूली लक्ष्य", f"₹{total_collection}")
-        c3.metric("सरकारी बिल", "₹48,522") # यहाँ आप सरकारी बिल डाल सकते हैं
+        c3.metric("सरकारी बिल", "₹48,522") 
 
     with tab2:
         st.subheader("रीडिंग रजिस्टर (Editable)")
-        # यहीं वो जादू है - शीट जैसा फील
+        # डेटा एडिटर जहाँ आप बदलाव कर सकते हैं
         edited_df = st.data_editor(df, num_rows="dynamic", key="data_editor")
         
         if st.button("शीट में डेटा सेव करें"):
+            # शीट अपडेट करने का तरीका
             sheet.update([edited_df.columns.values.tolist()] + edited_df.values.tolist())
             st.success("डेटा पक्का हो गया, राजा साहब!")
 
@@ -59,7 +66,11 @@ try:
         st.write(f"**कुल बकाया: ₹{shop_data['Total_Amount']}**")
         
         if st.button("WhatsApp बिल भेजें"):
-            st.info("WhatsApp की लिंक जनरेट हो रही है...")
+            whatsapp_no = str(shop_data['WhatsApp No'])
+            message = f"प्रणाम, {shop} का बिजली बिल: {shop_data['Total_Amount']} रुपये। नई रीडिंग: {shop_data['Curr_Reading']}"
+            link = f"https://wa.me/{whatsapp_no}?text={message.replace(' ', '%20')}"
+            st.markdown(f"[यहाँ क्लिक करके WhatsApp भेजें]({link})")
 
 except Exception as e:
-    st.error(f"अभी कनेक्शन नहीं हुआ है। पहले GitHub पर डालें। Error: {e}")
+    st.error(f"अभी कनेक्शन में दिक्कत है। कृपया Secrets चेक करें।")
+    st.info(f"तकनीकी एरर: {e}")
