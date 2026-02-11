@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+import re
 
 st.set_page_config(page_title="Mishra Market HQ", layout="wide")
 
@@ -10,26 +11,34 @@ def get_gspread_client():
         scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         creds_info = dict(st.secrets["gcp_service_account"])
         
-        # चाबी की मरम्मत (Repairing the Key)
-        key = creds_info["private_key"].replace("\\n", "\n")
+        # राजा साहब, यहाँ हम चाबी की 'सर्जरी' करेंगे ताकि एरर न आए
+        raw_key = creds_info["private_key"]
         
-        # पक्का करना कि BEGIN और END लाइन्स सही हैं
-        if "-----BEGIN PRIVATE KEY-----" not in key:
-            key = f"-----BEGIN PRIVATE KEY-----\n{key}\n-----END PRIVATE KEY-----\n"
+        # सिर्फ ज़रूरी हिस्सा (Base64) निकालना
+        # BEGIN और END के बीच का मसाला साफ़ करना
+        if "-----BEGIN PRIVATE KEY-----" in raw_key:
+            raw_key = raw_key.split("-----BEGIN PRIVATE KEY-----")[1]
+        if "-----END PRIVATE KEY-----" in raw_key:
+            raw_key = raw_key.split("-----END PRIVATE KEY-----")[0]
             
-        creds_info["private_key"] = key
+        # हर तरह का स्पेस, न्यू-लाइन और कचरा हटाना
+        clean_key_body = re.sub(r'\s+', '', raw_key).strip()
+        
+        # अब इसे मशीन के समझने लायक सही साफ़-सुथरे फॉर्मेट में जोड़ना
+        formatted_key = f"-----BEGIN PRIVATE KEY-----\n{clean_key_body}\n-----END PRIVATE KEY-----\n"
+        creds_info["private_key"] = formatted_key
         
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"चाबी में अभी भी दिक्कत है: {e}")
+        st.error(f"चाबी लोड करने में दिक्कत: {e}")
         return None
 
 def load_data():
     client = get_gspread_client()
     if client:
         try:
-            # शीट का नाम पक्का Mishra_Market_Data होना चाहिए
+            # शीट का नाम पक्का चेक करें
             sheet = client.open("Mishra_Market_Data").sheet1
             data = sheet.get_all_records()
             return pd.DataFrame(data), sheet
